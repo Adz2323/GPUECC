@@ -3,7 +3,7 @@
 #define GEC_BIGINT_DATA_ARRAY_HPP
 
 #include "literal.hpp"
-#include <gec/utils/sequence.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
