@@ -6,9 +6,9 @@
 #include <immintrin.h>
 #endif // GEC_ENABLE_AVX2
 
-#include <gec/utils/arithmetic.hpp>
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/arithmetic.hpp>
+#include <utils/crtp.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
