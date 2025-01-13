@@ -2,8 +2,8 @@
 #ifndef GEC_BIGINT_MIXIN_VT_COMPARE_HPP
 #define GEC_BIGINT_MIXIN_VT_COMPARE_HPP
 
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/crtp.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
