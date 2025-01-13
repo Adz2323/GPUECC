@@ -2,9 +2,9 @@
 #ifndef GEC_CURVE_DATA_HASHER_HPP
 #define GEC_CURVE_DATA_HASHER_HPP
 
-#include <gec/bigint/data/hasher.hpp>
-#include <gec/utils/basic.hpp>
-#include <gec/utils/hash.hpp>
+#include <bigint/data/hasher.hpp>
+#include <utils/basic.hpp>
+#include <utils/hash.hpp>
 
 #include <functional>
 
