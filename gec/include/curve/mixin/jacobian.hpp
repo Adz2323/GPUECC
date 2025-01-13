@@ -2,7 +2,7 @@
 #ifndef GEC_CURVE_MIXIN_JACOBAIN_HPP
 #define GEC_CURVE_MIXIN_JACOBAIN_HPP
 
-#include <gec/utils/crtp.hpp>
+#include <utils/crtp.hpp>
 
 namespace gec {
 
