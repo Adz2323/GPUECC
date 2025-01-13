@@ -6,6 +6,7 @@
 #include "xxhash.h"
 #include <random>
 #include <iostream>
+#include <csignal>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -18,9 +19,9 @@
 #include <chrono>
 
 // Constants
-constexpr size_t MAX_ENTRIES1 = 100000000;
-constexpr size_t MAX_ENTRIES2 = 80000000;
-constexpr size_t MAX_ENTRIES3 = 60000000;
+constexpr size_t MAX_ENTRIES1 = 10000000000;
+constexpr size_t MAX_ENTRIES2 = 8000000000;
+constexpr size_t MAX_ENTRIES3 = 6000000000;
 constexpr double BLOOM1_FP_RATE = 0.0001;
 constexpr double BLOOM2_FP_RATE = 0.00001;
 constexpr double BLOOM3_FP_RATE = 0.000001;
