@@ -2,8 +2,8 @@
 #ifndef GEC_BIGINT_MIXIN_EXPONENTIATION_HPP
 #define GEC_BIGINT_MIXIN_EXPONENTIATION_HPP
 
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/misc.hpp>
+#include <utils/crtp.hpp>
+#include <utils/misc.hpp>
 
 namespace gec {
 
