@@ -1,7 +1,7 @@
-#include <gec/curve/secp256k1.hpp>
-#include <gec/bigint/mixin/random.hpp>
-#include <gec/utils/basic.hpp>
-#include <gec/utils/crtp.hpp>
+#include <curve/secp256k1.hpp>
+#include <bigint/mixin/random.hpp>
+#include <utils/basic.hpp>
+#include <utils/crtp.hpp>
 #include "bloom.h"
 #include "xxhash.h"
 #include <random>
@@ -307,7 +307,7 @@ public:
 
     void subtract_range(const Scalar &start, const Scalar &end)
     {
-        unsigned int num_threads = 2;
+        unsigned int num_threads = 16;
         std::vector<std::thread> threads;
 
         // Start worker threads
