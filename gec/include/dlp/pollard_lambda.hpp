@@ -2,10 +2,10 @@
 #ifndef GEC_DLP_POLLARD_LAMBDA_HPP
 #define GEC_DLP_POLLARD_LAMBDA_HPP
 
-#include <gec/bigint/mixin/random.hpp>
-#include <gec/utils/basic.hpp>
-#include <gec/utils/misc.hpp>
-#include <gec/utils/static_map.hpp>
+#include <bigint/mixin/random.hpp>
+#include <utils/basic.hpp>
+#include <utils/misc.hpp>
+#include <utils/static_map.hpp>
 
 #include <random>
 
