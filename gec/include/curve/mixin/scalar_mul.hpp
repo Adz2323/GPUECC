@@ -2,9 +2,9 @@
 #ifndef GEC_CURVE_MIXIN_SCALER_MUL_HPP
 #define GEC_CURVE_MIXIN_SCALER_MUL_HPP
 
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/misc.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/crtp.hpp>
+#include <utils/misc.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
