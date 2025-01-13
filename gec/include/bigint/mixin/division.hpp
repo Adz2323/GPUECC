@@ -2,11 +2,11 @@
 #ifndef GEC_BIGINT_MIXIN_DIVISION_HPP
 #define GEC_BIGINT_MIXIN_DIVISION_HPP
 
-#include <gec/utils/arithmetic.hpp>
-#include <gec/utils/basic.hpp>
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/misc.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/arithmetic.hpp>
+#include <utils/basic.hpp>
+#include <utils/crtp.hpp>
+#include <utils/misc.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
