@@ -2,7 +2,7 @@
 #ifndef GEC_BIGINT_DATA_LITERAL_HPP
 #define GEC_BIGINT_DATA_LITERAL_HPP
 
-#include <gec/utils/basic.hpp>
+#include <utils/basic.hpp>
 #include <type_traits>
 
 namespace gec {
