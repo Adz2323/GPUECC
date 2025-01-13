@@ -1,9 +1,12 @@
-cmake_minimum_required(VERSION 3.17)
+cmake_minimum_required(VERSION 3.16)
 project(btc_keys)
 
 set(GEC_ENABLE_CUDA OFF)
 set(GEC_ENABLE_AVX2 ON)
-set(GEC_ENABLE_PTHREADS OFF)
+set(GEC_ENABLE_PTHREADS ON)  # Changed to ON since we need pthreads
+
+# Find Threads package
+find_package(Threads REQUIRED)
 
 add_subdirectory(gec)
 
@@ -46,6 +49,7 @@ target_link_libraries(btc_keys PRIVATE
     secp256k1
     bloom
     xxhash
+    Threads::Threads  # Added pthread support
 )
 
 set(CMAKE_CXX_STANDARD 17)
