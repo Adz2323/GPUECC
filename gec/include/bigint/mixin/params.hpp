@@ -2,7 +2,7 @@
 #ifndef GEC_BIGINT_MIXIN_PARAMS_HPP
 #define GEC_BIGINT_MIXIN_PARAMS_HPP
 
-#include <gec/utils/crtp.hpp>
+#include <utils/crtp.hpp>
 
 namespace gec {
 
