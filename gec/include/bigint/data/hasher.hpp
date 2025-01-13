@@ -2,9 +2,9 @@
 #ifndef GEC_BIGINT_DATA_HASHER_HPP
 #define GEC_BIGINT_DATA_HASHER_HPP
 
-#include <gec/utils/basic.hpp>
-#include <gec/utils/hash.hpp>
-#include <gec/utils/operators.hpp>
+#include <utils/basic.hpp>
+#include <utils/hash.hpp>
+#include <utils/operators.hpp>
 
 namespace gec {
 
