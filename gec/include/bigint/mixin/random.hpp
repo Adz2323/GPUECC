@@ -2,9 +2,9 @@
 #ifndef GEC_BIGINT_MIXIN_RANDOM_HPP
 #define GEC_BIGINT_MIXIN_RANDOM_HPP
 
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/misc.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/crtp.hpp>
+#include <utils/misc.hpp>
+#include <utils/sequence.hpp>
 
 #include <cassert>
 #include <random>
