@@ -1,4 +1,4 @@
-#include <gec/curve/secp256k1.hpp>
+#include <curve/secp256k1.hpp>
 
 #ifdef GEC_NVCC
 GEC_INT_TOO_LARGE
