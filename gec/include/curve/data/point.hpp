@@ -4,7 +4,7 @@
 
 #include "../mixin/arr_get_comp.hpp"
 #include "../mixin/named_comp.hpp"
-#include <gec/bigint/data/array.hpp>
+#include <bigint/data/array.hpp>
 
 namespace gec {
 
