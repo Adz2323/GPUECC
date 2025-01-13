@@ -2,7 +2,7 @@
 #ifndef GEC_BIGINT_MIXIN_OSTREAM_HPP
 #define GEC_BIGINT_MIXIN_OSTREAM_HPP
 
-#include <gec/utils/crtp.hpp>
+#include <utils/crtp.hpp>
 
 #include <iomanip>
 #include <ostream>
