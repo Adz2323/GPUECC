@@ -3,7 +3,7 @@
 #define GEC_CURVE_MIXIN_HASHER_HPP
 
 #include "../data/hasher.hpp"
-#include <gec/utils/crtp.hpp>
+#include <utils/crtp.hpp>
 
 namespace gec {
 
