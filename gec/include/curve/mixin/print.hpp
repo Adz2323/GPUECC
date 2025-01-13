@@ -3,7 +3,7 @@
 #define GEC_CURVE_MIXIN_PRINT_HPP
 
 #include <cstdio>
-#include <gec/utils/crtp.hpp>
+#include <utils/crtp.hpp>
 
 namespace gec {
 
