@@ -3,8 +3,8 @@
 #define GEC_CURVE_MIXIN_COMPWISE_EQ_HPP
 
 #include <cstdio>
-#include <gec/utils/crtp.hpp>
-#include <gec/utils/sequence.hpp>
+#include <utils/crtp.hpp>
+#include <utils/sequence.hpp>
 
 namespace gec {
 
