@@ -2,8 +2,8 @@
 #ifndef GEC_CURVE_SM2_HPP
 #define GEC_CURVE_SM2_HPP
 
-#include <gec/bigint/preset.hpp>
-#include <gec/curve/preset.hpp>
+#include <bigint/preset.hpp>
+#include <curve/preset.hpp>
 
 namespace gec {
 
