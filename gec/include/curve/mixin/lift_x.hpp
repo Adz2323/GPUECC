@@ -2,8 +2,8 @@
 #ifndef GEC_CURVE_MIXIN_LIFT_X_HPP
 #define GEC_CURVE_MIXIN_LIFT_X_HPP
 
-#include <gec/bigint/mixin/random.hpp>
-#include <gec/utils/crtp.hpp>
+#include <bigint/mixin/random.hpp>
+#include <utils/crtp.hpp>
 
 namespace gec {
 
