@@ -2,8 +2,8 @@
 #ifndef GEC_BIGINT_MIXIN_PRINT_HPP
 #define GEC_BIGINT_MIXIN_PRINT_HPP
 
-#include <gec/utils/basic.hpp>
-#include <gec/utils/crtp.hpp>
+#include <utils/basic.hpp>
+#include <utils/crtp.hpp>
 
 #include <limits>
 #include <type_traits>
