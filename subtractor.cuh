@@ -113,15 +113,17 @@ namespace gec
     };
 }
 
+// Forward declarations
 __global__ void subtract_kernel(
-    const gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *input_point,
-    const gec::curve::secp256k1::Scalar start,
-    const gec::curve::secp256k1::Scalar step,
-    const size_t batch_size,
-    gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *results,
-    gec::curve::secp256k1::Scalar *scalars);
+    gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *points,
+    const gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> &input_point,
+    const uint64_t *random_values,
+    size_t n);
+
 extern const std::string RANGE_START;
 extern const std::string RANGE_END;
+
+// Parse hex function declaration
 gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex);
 
 class PubkeySubtractor
@@ -136,7 +138,7 @@ public:
     static constexpr double BLOOM3_FP_RATE = 0.000001;
     static constexpr size_t PUBKEY_PREFIX_LENGTH = 6;
 
-    using CurvePoint = gec::curve::secp256k1::Curve<gec::curve::JacobianCurve>;
+    using Point = gec::curve::secp256k1::Curve<>;
     using Field = gec::curve::secp256k1::Field;
     using Scalar = gec::curve::secp256k1::Scalar;
 
@@ -145,11 +147,10 @@ public:
 
     bool init_bloom_filters(const std::string &filename);
     void subtract_range(const Scalar &start, const Scalar &end, std::atomic<bool> &should_stop);
-    gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex);
 
 private:
     // Host data
-    CurvePoint h_input_point;
+    Point h_input_point;
     bloom h_bloom_filter1;
     bloom h_bloom_filter2;
     bloom h_bloom_filter3;
@@ -162,27 +163,25 @@ private:
     bool bloom_initialized{false};
 
     // Device data
-    CurvePoint *d_input_point{nullptr};
-    CurvePoint *d_results{nullptr};
-    Scalar *d_scalars{nullptr};
+    Point *d_points{nullptr};
+    uint64_t *d_random_values{nullptr};
+    Point *h_points{nullptr};
+    uint64_t *h_random_values{nullptr};
 
-// CUDA streams and events
-#ifdef __CUDACC__
+    // CUDA streams and events
     cudaStream_t compute_stream{nullptr};
     cudaStream_t transfer_stream{nullptr};
     cudaEvent_t compute_done{nullptr};
     cudaEvent_t transfer_done{nullptr};
-#endif
 
     // Methods
     bool parse_pubkey(const std::string &pubkey);
     void report_status(bool final = false);
     void cleanup_device();
     void initialize_device();
-    void save_match(const std::string &pubkey, const Scalar &scalar);
+    void save_match(const std::string &pubkey, uint64_t value);
     bool check_bloom_filters(const std::string &compressed);
     void process_entries(const char *data, size_t num_entries, bool is_binary);
-    void process_gpu_results(CurvePoint *points, Scalar *scalars, size_t valid_results);
 
     struct WorkerBuffer
     {
