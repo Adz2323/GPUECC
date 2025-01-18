@@ -306,23 +306,22 @@ public:
         unsigned int num_threads = 16;
         std::vector<std::thread> threads;
 
+        // Launch worker threads
         for (unsigned int i = 0; i < num_threads; i++)
         {
             threads.emplace_back([this]()
                                  { worker_thread(); });
         }
 
+        // Launch status reporting thread
         threads.emplace_back([this]()
                              {
-            while (!should_stop) {
-                report_status();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            } });
+        while (!should_stop) {
+            report_status();
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        } });
 
-        std::cout << "\nPress Enter to stop..." << std::endl;
-        std::cin.get();
-        should_stop = true;
-
+        // Wait for all threads to complete
         for (auto &thread : threads)
         {
             thread.join();
