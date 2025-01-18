@@ -27,9 +27,13 @@ constexpr double BLOOM2_FP_RATE = 0.00001;
 constexpr double BLOOM3_FP_RATE = 0.000001;
 constexpr size_t PUBKEY_PREFIX_LENGTH = 6;
 constexpr size_t BATCH_SIZE = 1024;
-constexpr size_t BUFFER_SIZE = 1024 * 1024; // 1MB buffer per thread
+constexpr size_t BUFFER_SIZE = 1024 * 1024;
 
-// CustomRng from CORRECT_Pri_2_PubMulti.cpp
+// Constants from CORRECT_Pri_2_PubMulti.cpp
+const std::string RANGE_START = "4000000000000000000000000000000000";
+const std::string RANGE_END = "7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
+
+// CustomRng implementation
 struct CustomRng
 {
     std::mt19937_64 gen;
@@ -170,7 +174,6 @@ public:
 
         auto start_time = std::chrono::steady_clock::now();
 
-        // Worker thread implementation
         auto worker = [&](int thread_id)
         {
             WorkerBuffer &buffer = buffers[thread_id];
@@ -205,13 +208,11 @@ public:
             }
         };
 
-        // Launch worker threads
         for (unsigned int i = 0; i < num_threads; i++)
         {
             threads.emplace_back(worker, i);
         }
 
-        // Join threads
         for (auto &thread : threads)
         {
             thread.join();
@@ -235,15 +236,11 @@ public:
         }
 
         if (!bloom_check(&bloom_filter1, reinterpret_cast<const char *>(x_coord.data()), PUBKEY_PREFIX_LENGTH))
-        {
             return false;
-        }
 
         XXH64_hash_t hash1 = XXH64(x_coord.data(), 32, 0x1234);
         if (!bloom_check(&bloom_filter2, reinterpret_cast<const char *>(&hash1), sizeof(hash1)))
-        {
             return false;
-        }
 
         XXH64_hash_t hash2 = XXH64(x_coord.data(), 32, 0x5678);
         return bloom_check(&bloom_filter3, reinterpret_cast<const char *>(&hash2), sizeof(hash2));
@@ -285,9 +282,7 @@ public:
     bool parse_pubkey(const std::string &pubkey)
     {
         if (pubkey.length() != 66 || pubkey[0] != '0' || (pubkey[1] != '2' && pubkey[1] != '3'))
-        {
             return false;
-        }
 
         bool is_odd = (pubkey[1] == '3');
         std::string x_str = pubkey.substr(2);
@@ -306,19 +301,17 @@ public:
         return Point::lift_x(input_point, mont_x, is_odd, gec_rng);
     }
 
-    void subtract_range(const Scalar &start, const Scalar &end)
+    void subtract_range(const Scalar &start_scalar, const Scalar &end_scalar)
     {
         unsigned int num_threads = 16;
         std::vector<std::thread> threads;
 
-        // Start worker threads
         for (unsigned int i = 0; i < num_threads; i++)
         {
-            threads.emplace_back([this, &start, &end]()
-                                 { worker_thread(start, end); });
+            threads.emplace_back([this]()
+                                 { worker_thread(); });
         }
 
-        // Start status thread
         threads.emplace_back([this]()
                              {
             while (!should_stop) {
@@ -344,42 +337,37 @@ private:
         auto current_time = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count();
         uint64_t current_attempts = attempts.load();
+        double kps = elapsed > 0 ? static_cast<double>(current_attempts) / elapsed : 0;
 
         std::lock_guard<std::mutex> lock(cout_mutex);
-        std::cout << "\rAttempts: " << current_attempts;
-        if (elapsed > 0)
+        if (final)
         {
-            double rate = static_cast<double>(current_attempts) / elapsed;
-            std::cout << " | Rate: " << std::fixed << std::setprecision(2)
-                      << rate << " attempts/sec";
+            std::cout << "\nCompleted with " << kps << " k/s" << std::endl;
         }
-        std::cout << std::string(20, ' ') << (final ? "\n" : "\r") << std::flush;
     }
 
-    void worker_thread(const Scalar &start, const Scalar &end)
+    void worker_thread()
     {
         CustomRng rng_base;
         auto gec_rng = gec::GecRng<CustomRng>(rng_base);
-
         Point gen_mult, result;
         Scalar s;
 
         while (!should_stop)
         {
-            // Generate random scalar between start and end
+            // Generate random scalar (40-7F for first two digits)
             s.array()[3] = 0;
-            s.array()[2] = start.array()[2] + (rng_base.operator()<uint64_t>() %
-                                               (end.array()[2] - start.array()[2]));
+            s.array()[2] = 0x40ULL + (rng_base.operator()<uint64_t>() % 0x40ULL);
             s.array()[1] = rng_base.operator()<uint64_t>();
             s.array()[0] = rng_base.operator()<uint64_t>();
 
-            // Use GEC's optimized point arithmetic
+            // Calculate point arithmetic
             Point::mul(gen_mult, s, gec::curve::secp256k1::Gen);
             Field::neg(gen_mult.y(), gen_mult.y());
             Point::add(result, input_point, gen_mult);
             Point::to_affine(result);
 
-            // Get compressed public key
+            // Format the compressed public key
             std::stringstream ss;
             ss << std::hex << std::setfill('0');
 
@@ -399,18 +387,20 @@ private:
 
             attempts++;
 
+            auto current_time = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count();
+            double kps = elapsed > 0 ? static_cast<double>(attempts) / elapsed : 0;
+
             {
                 std::lock_guard<std::mutex> lock(cout_mutex);
                 std::cout << "\r" << compressed << " - ";
                 for (int i = 3; i >= 0; --i)
                 {
-                    std::cout << std::hex << std::setfill('0') << std::setw(16)
-                              << s.array()[i];
+                    std::cout << std::hex << std::setfill('0') << std::setw(16) << s.array()[i];
                 }
-                std::cout << std::dec << std::flush;
+                std::cout << " " << std::fixed << std::setprecision(2) << kps << "/kps" << std::flush;
             }
 
-            // Check result against bloom filters
             if (blooms.check(compressed))
             {
                 std::lock_guard<std::mutex> lock(cout_mutex);
@@ -419,8 +409,7 @@ private:
                           << "Subtraction value: ";
                 for (int i = 3; i >= 0; --i)
                 {
-                    std::cout << std::hex << std::setfill('0') << std::setw(16)
-                              << s.array()[i];
+                    std::cout << std::hex << std::setfill('0') << std::setw(16) << s.array()[i];
                 }
                 std::cout << std::dec << std::endl;
 
@@ -432,8 +421,7 @@ private:
                                << "Subtraction: ";
                     for (int i = 3; i >= 0; --i)
                     {
-                        match_file << std::hex << std::setfill('0') << std::setw(16)
-                                   << s.array()[i];
+                        match_file << std::hex << std::setfill('0') << std::setw(16) << s.array()[i];
                     }
                     match_file << std::dec << "\n\n";
                 }
@@ -441,6 +429,19 @@ private:
         }
     }
 };
+
+gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex)
+{
+    gec::curve::secp256k1::Scalar result;
+    std::string padded_hex = std::string(64 - hex.length(), '0') + hex;
+
+    for (int i = 0; i < 4; i++)
+    {
+        std::string chunk = padded_hex.substr(i * 16, 16);
+        result.array()[3 - i] = std::stoull(chunk, nullptr, 16);
+    }
+    return result;
+}
 
 int main(int argc, char *argv[])
 {
@@ -450,7 +451,7 @@ int main(int argc, char *argv[])
         {
             std::cout << "Usage: " << argv[0] << " <compressed_pubkey> <start:end> -f <pubkeys.bin>\n"
                       << "Example: " << argv[0] << " 02145d2611c823a396ef6712ce0f712f09b9b4f3135e3e0aa3230fb9b6d08d1e16"
-                      << " 21778071482940061661655974875633165533184:43556142965880123323311949751266331066367"
+                      << " " << RANGE_START << ":" << RANGE_END
                       << " -f scanned_pubkeys.bin" << std::endl;
             return 1;
         }
@@ -459,56 +460,22 @@ int main(int argc, char *argv[])
         const std::string range_str = argv[2];
         const std::string bloom_file = argv[4];
 
-        size_t colon_pos = range_str.find(':');
-        if (colon_pos == std::string::npos)
+        std::cout << "\nRange Confirmation:\n";
+        std::cout << "Start (Hex): 0x" << RANGE_START << "\n";
+        std::cout << "End (Hex): 0x" << RANGE_END << "\n\n";
+        std::cout << "Proceed? (Y/N): ";
+
+        char response;
+        std::cin >> response;
+        if (response != 'Y' && response != 'y')
         {
-            std::cerr << "Invalid range format. Use start:end" << std::endl;
-            return 1;
+            std::cout << "Operation cancelled.\n";
+            return 0;
         }
 
         using Scalar = gec::curve::secp256k1::Scalar;
-        Scalar start, end;
-
-        try
-        {
-            // Initialize scalars
-            for (int i = 0; i < 4; i++)
-            {
-                start.array()[i] = 0;
-                end.array()[i] = 0;
-            }
-
-            // Parse large decimal strings to limbs
-            std::string start_str = range_str.substr(0, colon_pos);
-            std::string end_str = range_str.substr(colon_pos + 1);
-
-            // Convert to limbs, handling chunks of 16 characters (64 bits)
-            size_t pos = 0;
-            int limb = 0;
-            while (pos < start_str.length() && limb < 4)
-            {
-                size_t chunk_size = std::min<size_t>(16, start_str.length() - pos);
-                std::string chunk = start_str.substr(pos, chunk_size);
-                start.array()[limb++] = std::stoull(chunk);
-                pos += chunk_size;
-            }
-
-            pos = 0;
-            limb = 0;
-            while (pos < end_str.length() && limb < 4)
-            {
-                size_t chunk_size = std::min<size_t>(16, end_str.length() - pos);
-                std::string chunk = end_str.substr(pos, chunk_size);
-                end.array()[limb++] = std::stoull(chunk);
-                pos += chunk_size;
-            }
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "Error parsing range values: " << e.what() << std::endl;
-            std::cerr << "Please provide valid decimal numbers for the range" << std::endl;
-            return 1;
-        }
+        Scalar start = parse_hex_string(RANGE_START);
+        Scalar end = parse_hex_string(RANGE_END);
 
         PubkeySubtractor subtractor(pubkey);
         std::cout << "Initializing bloom filters from: " << bloom_file << std::endl;
@@ -521,8 +488,8 @@ int main(int argc, char *argv[])
 
         std::cout << "\nConfiguration:\n"
                   << "Public Key: " << pubkey << "\n"
-                  << "Range Start: " << range_str.substr(0, colon_pos) << "\n"
-                  << "Range End: " << range_str.substr(colon_pos + 1) << "\n"
+                  << "Range Start: 0x" << RANGE_START << "\n"
+                  << "Range End: 0x" << RANGE_END << "\n"
                   << "Bloom Filter File: " << bloom_file << "\n"
                   << "Using Threads: " << std::thread::hardware_concurrency() << "\n\n";
 
