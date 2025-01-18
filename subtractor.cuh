@@ -1,6 +1,11 @@
 #pragma once
 
 #include <curve/secp256k1.hpp>
+#include <bigint/data/literal.hpp>
+#include <bigint/data/array.hpp>
+#include <bigint/mixin/division.hpp>
+#include <bigint/mixin/add_sub.hpp>
+#include <bigint/preset.hpp>
 #include <cuda_runtime.h>
 #ifdef __CUDACC__
 #include <cooperative_groups.h>
@@ -115,14 +120,17 @@ __global__ void subtract_kernel(
     const size_t batch_size,
     gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *results,
     gec::curve::secp256k1::Scalar *scalars);
+extern const std::string RANGE_START;
+extern const std::string RANGE_END;
+gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex);
 
 class PubkeySubtractor
 {
 public:
     // Constants
-    static constexpr size_t MAX_ENTRIES1 = 10000000000;
-    static constexpr size_t MAX_ENTRIES2 = 8000000000;
-    static constexpr size_t MAX_ENTRIES3 = 6000000000;
+    static constexpr size_t MAX_ENTRIES1 = 10000000;
+    static constexpr size_t MAX_ENTRIES2 = 8000000;
+    static constexpr size_t MAX_ENTRIES3 = 6000000;
     static constexpr double BLOOM1_FP_RATE = 0.0001;
     static constexpr double BLOOM2_FP_RATE = 0.00001;
     static constexpr double BLOOM3_FP_RATE = 0.000001;
@@ -137,7 +145,7 @@ public:
 
     bool init_bloom_filters(const std::string &filename);
     void subtract_range(const Scalar &start, const Scalar &end, std::atomic<bool> &should_stop);
-    std::pair<Scalar, Scalar> parse_range(const std::string &start_str, const std::string &end_str);
+    gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex);
 
 private:
     // Host data
@@ -148,6 +156,8 @@ private:
     std::atomic<uint64_t> attempts{0};
     std::chrono::steady_clock::time_point start_time;
     std::mutex cout_mutex;
+    std::string generated_pubkey;
+    std::string current_subtraction_value;
     size_t batch_size;
     bool bloom_initialized{false};
 
@@ -172,9 +182,7 @@ private:
     void save_match(const std::string &pubkey, const Scalar &scalar);
     bool check_bloom_filters(const std::string &compressed);
     void process_entries(const char *data, size_t num_entries, bool is_binary);
-    void process_gpu_results(const std::vector<CurvePoint> &points,
-                             const std::vector<Scalar> &scalars,
-                             size_t valid_results);
+    void process_gpu_results(CurvePoint *points, Scalar *scalars, size_t valid_results);
 
     struct WorkerBuffer
     {
