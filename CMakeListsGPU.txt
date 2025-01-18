@@ -1,0 +1,134 @@
+cmake_minimum_required(VERSION 3.17)
+project(btc_keys 
+  VERSION 0.1.0
+  DESCRIPTION "Bitcoin Key Subtractor"
+  LANGUAGES C CXX)
+
+option(GEC_ENABLE_CUDA "use CUDA" ON)
+option(GEC_ENABLE_AVX2 "use avx2" ON)
+option(GEC_ENABLE_PTHREADS "use pthread" ON)
+
+if(GEC_ENABLE_CUDA)
+  enable_language(CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+endif()
+
+add_definitions(-DCUDA_CACHE_PREFER_L1)
+add_definitions(-DCUDA_USE_SHARED_MEMORY)
+add_definitions(-DCUDA_ENABLE_CACHE_PREFERENCE)
+
+if(GEC_ENABLE_PTHREADS)
+  add_definitions(-DGEC_USE_THREADS)
+endif()
+
+find_package(Threads REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+find_package(OpenMP REQUIRED)
+
+add_subdirectory(gec)
+
+add_library(xxhash STATIC 
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom/xxhash.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom/xxhash.h
+)
+target_include_directories(xxhash PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom
+)
+
+add_library(bloom STATIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom/bloom.cpp
+)
+target_include_directories(bloom PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom
+)
+target_link_libraries(bloom PUBLIC xxhash)
+
+if(GEC_ENABLE_CUDA)
+  add_library(secp256k1_cuda STATIC
+      ${CMAKE_CURRENT_SOURCE_DIR}/gec/src/secp256k1.cu
+  )
+  
+  set_source_files_properties(
+      ${CMAKE_CURRENT_SOURCE_DIR}/gec/src/secp256k1.cu
+      PROPERTIES LANGUAGE CUDA
+  )
+
+  target_include_directories(secp256k1_cuda PUBLIC
+      ${CMAKE_CURRENT_SOURCE_DIR}/gec/include
+  )
+  target_link_libraries(secp256k1_cuda PUBLIC gec)
+  set_target_properties(secp256k1_cuda PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      POSITION_INDEPENDENT_CODE ON
+  )
+endif()
+
+add_executable(btc_keys 
+  main.cu
+  subtractor.cu
+)
+
+if(GEC_ENABLE_CUDA)
+  set_source_files_properties(
+      main.cu
+      subtractor.cu
+      PROPERTIES LANGUAGE CUDA
+  )
+
+  set_target_properties(btc_keys PROPERTIES 
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+  )
+
+  target_compile_options(btc_keys PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:
+          --ptxas-options=-v
+          --use_fast_math
+          --expt-relaxed-constexpr
+          --extended-lambda
+          -rdc=true
+      >
+  )
+endif()
+
+target_include_directories(btc_keys PRIVATE 
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/gec/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/bloom
+  ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+target_link_libraries(btc_keys PRIVATE 
+  gec 
+  secp256k1_cuda
+  secp256k1
+  bloom
+  xxhash
+  Threads::Threads
+  CUDA::curand
+  CUDA::cudart
+  OpenMP::OpenMP_CXX
+)
+
+if(GEC_ENABLE_AVX2)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+      target_compile_options(btc_keys PRIVATE
+          $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/arch:AVX2>
+          $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>
+      )
+  else()
+      target_compile_options(btc_keys PRIVATE
+          $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-march=native>
+          $<$<COMPILE_LANGUAGE:CXX>:-march=native>
+      )
+  endif()
+endif()
+
+target_compile_definitions(btc_keys PRIVATE
+  $<$<CONFIG:Debug>:DEBUG>
+  $<$<CONFIG:Release>:NDEBUG>
+  CUDA_USE_SHARED_MEMORY
+  CUDA_ENABLE_CACHE_PREFERENCE
+  GEC_ENABLE_CUDA
+)
