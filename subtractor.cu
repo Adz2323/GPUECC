@@ -16,44 +16,49 @@ const std::string RANGE_START = "4000000000000000000000000000000000";
 const std::string RANGE_END = "7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
 
 __global__ void subtract_kernel(
-    const gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *input_point,
-    const gec::curve::secp256k1::Scalar start,
-    const gec::curve::secp256k1::Scalar step,
-    const size_t batch_size,
-    gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *results,
-    gec::curve::secp256k1::Scalar *scalars)
+    gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *points,
+    const gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> &input_point,
+    const uint64_t *random_values,
+    size_t n)
 {
-    using namespace gec::curve::secp256k1;
-    using JPoint = Curve<gec::curve::JacobianCurve>;
-
-    cg::grid_group grid = cg::this_grid();
-    const size_t idx = grid.thread_rank();
-
-    if (idx >= batch_size)
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n)
         return;
 
-    // Calculate scalar for this thread
-    Scalar current = start;
-    for (size_t i = 0; i < idx; i++)
+    using JPoint = gec::curve::secp256k1::Curve<gec::curve::JacobianCurve>;
+    using Scalar = gec::curve::secp256k1::Scalar;
+    using Field = gec::curve::secp256k1::Field;
+
+    // Initialize scalar directly without std::fill
+    Scalar s;
+    for (int i = 0; i < 4; ++i)
     {
-        current.add(current, step);
+        s.array()[i] = (i == 0) ? random_values[idx] : 0;
     }
 
     // Calculate generator point multiplication
     JPoint gen_mult;
-    JPoint::mul(gen_mult, current, d_Gen);
+    JPoint::mul(gen_mult, s, gec::curve::secp256k1::d_Gen);
 
     // Negate y coordinate for subtraction
     Field::neg(gen_mult.y(), gen_mult.y());
 
-    // Add to input point
-    JPoint::add(results[idx], *input_point, gen_mult);
-    JPoint::to_affine(results[idx]);
+    // Add points (subtraction due to negation)
+    JPoint::add(points[idx], input_point, gen_mult);
+    JPoint::to_affine(points[idx]);
+}
 
-    // Store scalar
-    scalars[idx] = current;
+gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex)
+{
+    gec::curve::secp256k1::Scalar result;
+    std::string padded_hex = std::string(64 - hex.length(), '0') + hex;
 
-    grid.sync();
+    for (int i = 0; i < 4; i++)
+    {
+        std::string chunk = padded_hex.substr(i * 16, 16);
+        result.array()[3 - i] = std::stoull(chunk, nullptr, 16);
+    }
+    return result;
 }
 
 PubkeySubtractor::PubkeySubtractor(const std::string &pubkey, size_t optimal_batch_size)
@@ -81,39 +86,28 @@ PubkeySubtractor::~PubkeySubtractor()
 
 void PubkeySubtractor::initialize_device()
 {
+    cudaMalloc(&d_points, batch_size * sizeof(Point));
+    cudaMalloc(&d_random_values, batch_size * sizeof(uint64_t));
+
+    cudaMallocHost(&h_points, batch_size * sizeof(Point));
+    cudaMallocHost(&h_random_values, batch_size * sizeof(uint64_t));
+
     cudaStreamCreate(&compute_stream);
     cudaStreamCreate(&transfer_stream);
     cudaEventCreate(&compute_done);
     cudaEventCreate(&transfer_done);
-
-    cudaMalloc(&d_input_point, sizeof(CurvePoint));
-    cudaMalloc(&d_results, batch_size * sizeof(CurvePoint));
-    cudaMalloc(&d_scalars, batch_size * sizeof(Scalar));
-
-    cudaMemcpy(d_input_point, &h_input_point, sizeof(CurvePoint), cudaMemcpyHostToDevice);
-}
-
-gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex)
-{
-    gec::curve::secp256k1::Scalar result;
-    std::string padded_hex = std::string(64 - hex.length(), '0') + hex;
-
-    for (int i = 0; i < 4; i++)
-    {
-        std::string chunk = padded_hex.substr(i * 16, 16);
-        result.array()[3 - i] = std::stoull(chunk, nullptr, 16);
-    }
-    return result;
 }
 
 void PubkeySubtractor::cleanup_device()
 {
-    if (d_input_point)
-        cudaFree(d_input_point);
-    if (d_results)
-        cudaFree(d_results);
-    if (d_scalars)
-        cudaFree(d_scalars);
+    if (d_points)
+        cudaFree(d_points);
+    if (d_random_values)
+        cudaFree(d_random_values);
+    if (h_points)
+        cudaFreeHost(h_points);
+    if (h_random_values)
+        cudaFreeHost(h_random_values);
 
     if (compute_stream)
         cudaStreamDestroy(compute_stream);
@@ -124,9 +118,10 @@ void PubkeySubtractor::cleanup_device()
     if (transfer_done)
         cudaEventDestroy(transfer_done);
 
-    d_input_point = nullptr;
-    d_results = nullptr;
-    d_scalars = nullptr;
+    d_points = nullptr;
+    d_random_values = nullptr;
+    h_points = nullptr;
+    h_random_values = nullptr;
     compute_stream = nullptr;
     transfer_stream = nullptr;
     compute_done = nullptr;
@@ -308,179 +303,132 @@ void PubkeySubtractor::subtract_range(const Scalar &start, const Scalar &end, st
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
 
-    if (!d_input_point || !d_results || !d_scalars || !compute_stream || !transfer_stream)
+    if (!d_points || !d_random_values || !h_points || !h_random_values)
     {
         std::cerr << "Device resources not properly initialized\n";
         return;
     }
 
-    // Calculate block configuration
     const size_t block_size = 256;
-    int max_blocks_per_sm;
-    cudaDeviceGetAttribute(&max_blocks_per_sm, cudaDevAttrMaxBlocksPerMultiprocessor, 0);
+    const size_t num_blocks = (batch_size + block_size - 1) / block_size;
+    std::mt19937_64 rng(std::random_device{}());
 
-    // Limit blocks to 16 per SM for better occupancy
-    const size_t total_sms = deviceProp.multiProcessorCount;
-    const size_t max_blocks = std::min(16U * total_sms, static_cast<size_t>(max_blocks_per_sm * total_sms));
-    const size_t num_blocks = std::min((batch_size + block_size - 1) / block_size, max_blocks);
-    const size_t actual_batch_size = num_blocks * block_size;
-
-    std::cout << "Grid configuration: " << num_blocks << " blocks, "
-              << block_size << " threads per block ("
-              << actual_batch_size << " total threads)\n";
-
-    // Allocate host buffers
-    CurvePoint *h_results;
-    Scalar *h_scalars;
-    cudaHostAlloc(&h_results, actual_batch_size * sizeof(CurvePoint), cudaHostAllocDefault);
-    cudaHostAlloc(&h_scalars, actual_batch_size * sizeof(Scalar), cudaHostAllocDefault);
-
-    CustomRng rng_base;
-    Scalar current, step;
-    for (int i = 0; i < 4; i++)
-        step.array()[i] = 0;
-    step.array()[0] = 1;
+    // Create ranges for each limb
+    std::uniform_int_distribution<uint64_t> dist0(start.array()[0], end.array()[0]);
+    std::uniform_int_distribution<uint64_t> dist1(0, UINT64_MAX);
+    std::uniform_int_distribution<uint64_t> dist2(0, UINT64_MAX);
+    std::uniform_int_distribution<uint64_t> dist3(0, UINT64_MAX);
 
     std::cout << "Range: " << std::hex
-              << "Start: " << start.array()[3] << start.array()[2] << start.array()[1] << start.array()[0] << "\n"
-              << "End: " << end.array()[3] << end.array()[2] << end.array()[1] << end.array()[0] << std::dec << "\n"
-              << "Batch size: " << actual_batch_size << ", Blocks: " << num_blocks << "x" << block_size << "\n";
+              << "Start: " << std::setfill('0') << std::setw(16)
+              << start.array()[3] << start.array()[2] << start.array()[1] << start.array()[0] << "\n"
+              << "End: " << std::setfill('0') << std::setw(16)
+              << end.array()[3] << end.array()[2] << end.array()[1] << end.array()[0] << std::dec << "\n"
+              << "Batch size: " << batch_size << ", Blocks: " << num_blocks << "x" << block_size << "\n";
 
     while (!should_stop)
     {
-        // Generate random scalar
-        current.array()[3] = start.array()[3] + (rng_base.operator()<uint64_t>() % (end.array()[3] - start.array()[3] + 1));
-        if (current.array()[3] == end.array()[3])
+        Scalar current;
+        for (size_t i = 0; i < batch_size; ++i)
         {
-            current.array()[2] = start.array()[2] + (rng_base.operator()<uint64_t>() % (end.array()[2] - start.array()[2] + 1));
-        }
-        else if (current.array()[3] == start.array()[3])
-        {
-            current.array()[2] = start.array()[2] + rng_base.operator()<uint64_t>();
-        }
-        else
-        {
-            current.array()[2] = rng_base.operator()<uint64_t>();
-        }
-        current.array()[1] = rng_base.operator()<uint64_t>();
-        current.array()[0] = rng_base.operator()<uint64_t>();
+            h_random_values[i] = dist0(rng);
 
-        void *args[] = {(void *)&d_input_point, (void *)&current, (void *)&step,
-                        (void *)&actual_batch_size, (void *)&d_results, (void *)&d_scalars};
-
-        cudaStreamSynchronize(compute_stream);
-        cudaError_t kernelError = cudaLaunchCooperativeKernel(
-            (void *)subtract_kernel, num_blocks, block_size, args, 0, compute_stream);
-
-        if (kernelError != cudaSuccess)
-        {
-            std::cerr << "Kernel launch failed: " << cudaGetErrorString(kernelError) << "\n";
-            cudaGetLastError();
-            continue;
+            // If at start range, ensure higher limbs are within range
+            if (h_random_values[i] == start.array()[0])
+            {
+                current.array()[1] = start.array()[1] + (rng() % (UINT64_MAX - start.array()[1]));
+                current.array()[2] = start.array()[2];
+                current.array()[3] = start.array()[3];
+            }
+            // If at end range, ensure higher limbs don't exceed end
+            else if (h_random_values[i] == end.array()[0])
+            {
+                current.array()[1] = rng() % (end.array()[1] + 1);
+                current.array()[2] = rng() % (end.array()[2] + 1);
+                current.array()[3] = rng() % (end.array()[3] + 1);
+            }
+            // In middle of range, use full distribution
+            else
+            {
+                current.array()[1] = dist1(rng);
+                current.array()[2] = dist2(rng);
+                current.array()[3] = dist3(rng);
+            }
         }
+
+        cudaMemcpyAsync(d_random_values, h_random_values,
+                        batch_size * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice, compute_stream);
+
+        subtract_kernel<<<num_blocks, block_size, 0, compute_stream>>>(
+            d_points,
+            h_input_point,
+            d_random_values,
+            batch_size);
 
         cudaEventRecord(compute_done, compute_stream);
-        if (cudaEventSynchronize(compute_done) != cudaSuccess)
-            continue;
+        cudaStreamWaitEvent(transfer_stream, compute_done);
 
-        if (attempts.load() > 0)
+        cudaMemcpyAsync(h_points, d_points,
+                        batch_size * sizeof(Point),
+                        cudaMemcpyDeviceToHost, transfer_stream);
+
+        cudaEventRecord(transfer_done, transfer_stream);
+        cudaEventSynchronize(transfer_done);
+
+        for (size_t i = 0; i < batch_size; i++)
         {
-            cudaStreamWaitEvent(transfer_stream, compute_done);
+            const auto &point = h_points[i];
+            std::stringstream ss;
+            ss << std::hex << std::setfill('0');
 
-            cudaError_t copyError = cudaMemcpyAsync(h_results, d_results,
-                                                    actual_batch_size * sizeof(CurvePoint),
-                                                    cudaMemcpyDeviceToHost, transfer_stream);
-            if (copyError == cudaSuccess)
+            Field y_norm;
+            Field::from_montgomery(y_norm, point.y());
+            bool is_odd = (y_norm.array()[0] & 1) != 0;
+            ss << (is_odd ? "03" : "02");
+
+            Field x_norm;
+            Field::from_montgomery(x_norm, point.x());
+            for (size_t j = Field::LimbN; j > 0; --j)
             {
-                copyError = cudaMemcpyAsync(h_scalars, d_scalars,
-                                            actual_batch_size * sizeof(Scalar),
-                                            cudaMemcpyDeviceToHost, transfer_stream);
+                ss << std::setw(16) << x_norm.array()[j - 1];
             }
+            generated_pubkey = ss.str();
 
-            if (copyError != cudaSuccess)
-            {
-                std::cerr << "Memory transfer failed: " << cudaGetErrorString(copyError) << "\n";
-                continue;
-            }
+            ss.str("");
+            ss.clear();
+            ss << std::hex << std::setw(16) << h_random_values[i];
+            current_subtraction_value = ss.str();
 
-            cudaEventRecord(transfer_done, transfer_stream);
-            if (cudaEventSynchronize(transfer_done) == cudaSuccess)
+            if (check_bloom_filters(generated_pubkey))
             {
-                process_gpu_results(h_results, h_scalars, actual_batch_size);
+                save_match(generated_pubkey, h_random_values[i]);
             }
         }
 
-        attempts += actual_batch_size;
-        if (attempts.load() % (actual_batch_size * 10) == 0)
+        attempts += batch_size;
+        if (attempts.load() % (batch_size * 10) == 0)
         {
             report_status();
         }
     }
 
-    cudaFreeHost(h_results);
-    cudaFreeHost(h_scalars);
     cudaDeviceSynchronize();
     report_status(true);
 }
 
-void PubkeySubtractor::process_gpu_results(CurvePoint *points, Scalar *scalars, size_t valid_results)
-{
-    for (size_t i = 0; i < valid_results; i++)
-    {
-        std::stringstream ss;
-        ss << std::hex << std::setfill('0');
-
-        Field y_norm;
-        Field::from_montgomery(y_norm, points[i].y());
-        bool is_odd = (y_norm.array()[0] & 1) != 0;
-        ss << (is_odd ? "03" : "02");
-
-        Field x_norm;
-        Field::from_montgomery(x_norm, points[i].x());
-        for (size_t j = Field::LimbN; j > 0; --j)
-        {
-            ss << std::setw(16) << x_norm.array()[j - 1];
-        }
-        generated_pubkey = ss.str();
-
-        ss.str("");
-        ss.clear();
-        for (int j = 3; j >= 0; --j)
-        {
-            ss << std::hex << std::setfill('0') << std::setw(16) << scalars[i].array()[j];
-        }
-        current_subtraction_value = ss.str();
-
-        if (check_bloom_filters(generated_pubkey))
-        {
-            save_match(generated_pubkey, scalars[i]);
-        }
-    }
-}
-
-void PubkeySubtractor::save_match(const std::string &pubkey, const Scalar &scalar)
+void PubkeySubtractor::save_match(const std::string &pubkey, uint64_t value)
 {
     std::lock_guard<std::mutex> lock(cout_mutex);
     std::cout << "\nPotential match found!\n"
               << "Public key: " << pubkey << "\n"
-              << "Subtraction value: ";
-
-    for (int i = 3; i >= 0; --i)
-    {
-        std::cout << std::hex << std::setfill('0') << std::setw(16) << scalar.array()[i];
-    }
-    std::cout << std::dec << std::endl;
+              << "Subtraction value: " << std::hex << value << std::dec << "\n";
 
     std::ofstream match_file("matches.txt", std::ios::app);
     if (match_file)
     {
         match_file << "Public Key: " << pubkey << "\n"
-                   << "Subtraction: ";
-        for (int i = 3; i >= 0; --i)
-        {
-            match_file << std::hex << std::setfill('0') << std::setw(16) << scalar.array()[i];
-        }
-        match_file << std::dec << "\n\n";
+                   << "Subtraction: " << std::hex << std::setfill('0') << std::setw(16) << value << std::dec << "\n\n";
     }
 }
 
@@ -499,9 +447,8 @@ void PubkeySubtractor::report_status(bool final)
     }
     else
     {
-        std::cout << "\rAttempts: " << current_attempts
-                  << " Current Public Key: " << generated_pubkey
-                  << " Current Subtraction: " << current_subtraction_value
+        std::cout << "\rPK: " << generated_pubkey
+                  << " SUB: " << current_subtraction_value
                   << " Speed: " << std::fixed << std::setprecision(2)
                   << kps << " k/s" << std::flush;
     }
@@ -528,5 +475,5 @@ bool PubkeySubtractor::parse_pubkey(const std::string &pubkey)
     Field::mul(mont_x, x, Field::r_sqr());
 
     auto gec_rng = gec::GecRng<CustomRng>(CustomRng());
-    return CurvePoint::lift_x(h_input_point, mont_x, is_odd, gec_rng);
+    return Point::lift_x(h_input_point, mont_x, is_odd, gec_rng);
 }
