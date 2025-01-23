@@ -1,193 +1,159 @@
 #pragma once
+#ifndef GEC_SUBTRACTOR_CUH
+#define GEC_SUBTRACTOR_CUH
 
 #include <curve/secp256k1.hpp>
-#include <bigint/data/literal.hpp>
-#include <bigint/data/array.hpp>
-#include <bigint/mixin/division.hpp>
-#include <bigint/mixin/add_sub.hpp>
-#include <bigint/preset.hpp>
-#include <cuda_runtime.h>
-#ifdef __CUDACC__
-#include <cooperative_groups.h>
-namespace cg = cooperative_groups;
-#endif
-#include "bloom.h"
-#include "xxhash.h"
-#include <atomic>
-#include <mutex>
-#include <vector>
-#include <chrono>
-#include <random>
-
-struct CustomRng
-{
-    unsigned long state;
-
-#ifdef __CUDACC__
-    __host__ __device__ CustomRng()
-    {
-#ifdef __CUDA_ARCH__
-        state = clock64();
-#else
-        state = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-#endif
-    }
-#else
-    CustomRng()
-    {
-        state = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-    }
-#endif
-
-    template <typename T>
-#ifdef __CUDACC__
-    __host__ __device__
-#endif
-        T
-        operator()(T higher)
-    {
-        state = state * 6364136223846793005ULL + 1;
-        return state % higher;
-    }
-
-    template <typename T>
-#ifdef __CUDACC__
-    __host__ __device__
-#endif
-        T
-        operator()(T lower, T higher)
-    {
-        return lower + operator()(higher - lower);
-    }
-
-    template <typename T>
-#ifdef __CUDACC__
-    __host__ __device__
-#endif
-        T
-        operator()()
-    {
-        state = state * 6364136223846793005ULL + 1;
-        return static_cast<T>(state);
-    }
-};
+#include <bigint/mixin.hpp>
+#include <curve/mixin/scalar_mul.hpp>
+#include <utils/cuda_utils.cuh>
+#include <utils/basic.hpp>
+#include <curand_kernel.h>
+#include <utils.hpp>
+#include <curve.hpp>
+#include <bigint.hpp>
 
 namespace gec
 {
-    template <>
-    struct GecRng<CustomRng>
+    namespace curve
     {
-        CustomRng rng;
-
-        GecRng(CustomRng r) : rng(r) {}
-
-        template <typename T>
-#ifdef __CUDACC__
-        __host__ __device__
-#endif
-            T
-            sample()
+        namespace secp256k1
         {
-            return rng.template operator()<T>();
+
+            struct CustomRng
+            {
+                std::mt19937_64 gen;
+                CustomRng() : gen(std::random_device{}()) {}
+
+                template <typename T>
+                GEC_HD T operator()(T higher) { return gen() % higher; }
+
+                template <typename T>
+                GEC_HD T operator()(T lower, T higher) { return lower + (gen() % (higher - lower)); }
+
+                template <typename T>
+                GEC_HD T operator()() { return static_cast<T>(gen()); }
+            };
+
+            struct alignas(16) SubtractionResult
+            {
+                using Point = Curve<>;
+                Scalar scalar;
+                Point result;
+
+                GEC_HD void clear()
+                {
+                    scalar.set_zero();
+                    result.set_inf();
+                }
+            };
+
+            class SubtractorBatch
+            {
+            public:
+                using Point = Curve<>;
+
+                GEC_HD explicit SubtractorBatch(size_t batch_size) : size_(batch_size)
+                {
+                    cudaError_t err;
+                    err = cudaMalloc(&d_states_, batch_size * sizeof(curandState));
+                    if (err != cudaSuccess)
+                    {
+                        cleanup();
+                        return;
+                    }
+
+                    err = cudaMalloc(&d_results_, batch_size * sizeof(SubtractionResult));
+                    if (err != cudaSuccess)
+                    {
+                        cleanup();
+                        return;
+                    }
+
+                    err = cudaMalloc(&d_input_point_, sizeof(Point));
+                    if (err != cudaSuccess)
+                    {
+                        cleanup();
+                        return;
+                    }
+
+                    err = cudaMalloc(&d_range_start_, sizeof(Scalar));
+                    if (err != cudaSuccess)
+                    {
+                        cleanup();
+                        return;
+                    }
+
+                    err = cudaMalloc(&d_range_end_, sizeof(Scalar));
+                    if (err != cudaSuccess)
+                    {
+                        cleanup();
+                        return;
+                    }
+                }
+
+                GEC_HD ~SubtractorBatch()
+                {
+                    cleanup();
+                }
+
+                GEC_HD GEC_INLINE curandState *states() { return d_states_; }
+                GEC_HD GEC_INLINE SubtractionResult *results() { return d_results_; }
+                GEC_HD GEC_INLINE Point *input_point() { return d_input_point_; }
+                GEC_HD GEC_INLINE Scalar *range_start() { return d_range_start_; }
+                GEC_HD GEC_INLINE Scalar *range_end() { return d_range_end_; }
+                GEC_HD GEC_INLINE size_t size() const { return size_; }
+
+            private:
+                void cleanup()
+                {
+                    if (d_states_)
+                        cudaFree(d_states_);
+                    if (d_results_)
+                        cudaFree(d_results_);
+                    if (d_input_point_)
+                        cudaFree(d_input_point_);
+                    if (d_range_start_)
+                        cudaFree(d_range_start_);
+                    if (d_range_end_)
+                        cudaFree(d_range_end_);
+                    d_states_ = nullptr;
+                    d_results_ = nullptr;
+                    d_input_point_ = nullptr;
+                    d_range_start_ = nullptr;
+                    d_range_end_ = nullptr;
+                }
+
+                size_t size_;
+                curandState *d_states_ = nullptr;
+                SubtractionResult *d_results_ = nullptr;
+                Point *d_input_point_ = nullptr;
+                Scalar *d_range_start_ = nullptr;
+                Scalar *d_range_end_ = nullptr;
+            };
+
+            __global__ void setup_rand_kernel(curandState *states, unsigned long seed);
+
+            __global__ void subtract_pubkey_kernel(
+                curandState *states,
+                SubtractionResult *results,
+                const Curve<> *input,
+                const Curve<> *d_gen,
+                size_t batch_size,
+                bool *success_flags);
+
+            GEC_H cudaError_t initialize_subtractor(
+                SubtractorBatch &batch,
+                const Curve<> &input_point,
+                const Scalar &range_start,
+                const Scalar &range_end);
+
+            GEC_H cudaError_t launch_subtraction(
+                SubtractorBatch &batch,
+                dim3 grid,
+                dim3 block);
+
         }
+    }
+} // namespace gec::curve::secp256k1
 
-        template <typename T>
-#ifdef __CUDACC__
-        __host__ __device__
-#endif
-            T
-            sample(T higher)
-        {
-            return rng(higher);
-        }
-
-        template <typename T>
-#ifdef __CUDACC__
-        __host__ __device__
-#endif
-            T
-            sample(T lower, T higher)
-        {
-            return rng(lower, higher);
-        }
-    };
-}
-
-// Forward declarations
-__global__ void subtract_kernel(
-    gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> *points,
-    const gec::curve::secp256k1::Curve<gec::curve::JacobianCurve> &input_point,
-    const uint64_t *random_values,
-    size_t n);
-
-extern const std::string RANGE_START;
-extern const std::string RANGE_END;
-
-// Parse hex function declaration
-gec::curve::secp256k1::Scalar parse_hex_string(const std::string &hex);
-
-class PubkeySubtractor
-{
-public:
-    // Constants
-    static constexpr size_t MAX_ENTRIES1 = 10000000;
-    static constexpr size_t MAX_ENTRIES2 = 8000000;
-    static constexpr size_t MAX_ENTRIES3 = 6000000;
-    static constexpr double BLOOM1_FP_RATE = 0.0001;
-    static constexpr double BLOOM2_FP_RATE = 0.00001;
-    static constexpr double BLOOM3_FP_RATE = 0.000001;
-    static constexpr size_t PUBKEY_PREFIX_LENGTH = 6;
-
-    using Point = gec::curve::secp256k1::Curve<>;
-    using Field = gec::curve::secp256k1::Field;
-    using Scalar = gec::curve::secp256k1::Scalar;
-
-    PubkeySubtractor(const std::string &pubkey, size_t batch_size);
-    ~PubkeySubtractor();
-
-    bool init_bloom_filters(const std::string &filename);
-    void subtract_range(const Scalar &start, const Scalar &end, std::atomic<bool> &should_stop);
-
-private:
-    // Host data
-    Point h_input_point;
-    bloom h_bloom_filter1;
-    bloom h_bloom_filter2;
-    bloom h_bloom_filter3;
-    std::atomic<uint64_t> attempts{0};
-    std::chrono::steady_clock::time_point start_time;
-    std::mutex cout_mutex;
-    std::string generated_pubkey;
-    std::string current_subtraction_value;
-    size_t batch_size;
-    bool bloom_initialized{false};
-
-    // Device data
-    Point *d_points{nullptr};
-    uint64_t *d_random_values{nullptr};
-    Point *h_points{nullptr};
-    uint64_t *h_random_values{nullptr};
-
-    // CUDA streams and events
-    cudaStream_t compute_stream{nullptr};
-    cudaStream_t transfer_stream{nullptr};
-    cudaEvent_t compute_done{nullptr};
-    cudaEvent_t transfer_done{nullptr};
-
-    // Methods
-    bool parse_pubkey(const std::string &pubkey);
-    void report_status(bool final = false);
-    void cleanup_device();
-    void initialize_device();
-    void save_match(const std::string &pubkey, uint64_t value);
-    bool check_bloom_filters(const std::string &compressed);
-    void process_entries(const char *data, size_t num_entries, bool is_binary);
-
-    struct WorkerBuffer
-    {
-        std::vector<char> data;
-        size_t used{0};
-        WorkerBuffer() : data(1024 * 1024) {}
-        void reset() { used = 0; }
-    };
-};
+#endif // GEC_SUBTRACTOR_CUH
